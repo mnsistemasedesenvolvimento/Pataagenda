@@ -1,13 +1,16 @@
-// Cache APENAS a casca estática do aplicativo. Dados e autenticação exigem internet.
-const CACHE='matheus-pet-v3-flat-corrigido-2';
-const ASSETS=['./','./index.html','./cliente.html','./admin.html','./privacidade.html','./style.css','./config.js','./common.js','./cliente.js','./admin.js','./icon.svg','./icon-192.png','./icon-512.png','./manifest.webmanifest'];
-self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
-self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('matheus-pet-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+const CACHE='matheus-pet-v4-20261115';
+const PAGES=['./','./index.html','./cliente.html','./admin.html','./privacidade.html'];
+self.addEventListener('install',event=>{
+ event.waitUntil(caches.open(CACHE).then(cache=>Promise.allSettled(PAGES.map(url=>cache.add(url)))).then(()=>self.skipWaiting()));
+});
+self.addEventListener('activate',event=>{
+ event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('matheus-pet-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
+});
 self.addEventListener('fetch',event=>{
-  const request=event.request;
-  if(request.method!=='GET'||!request.url.startsWith(self.location.origin))return;
-  event.respondWith(fetch(request).then(response=>{
-    if(response.ok){const copy=response.clone();event.waitUntil(caches.open(CACHE).then(c=>c.put(request,copy)))}
-    return response;
-  }).catch(()=>caches.match(request).then(cached=>cached||Response.error())));
+ const request=event.request;
+ if(request.method!=='GET'||new URL(request.url).origin!==self.location.origin)return;
+ // Nunca retenha páginas com informações pessoais nem respostas do Supabase.
+ if(request.mode==='navigate'){
+  event.respondWith(fetch(request,{cache:'no-store'}).catch(()=>caches.match(request).then(hit=>hit||caches.match('./index.html'))));
+ }
 });
