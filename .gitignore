@@ -1,0 +1,6 @@
+# NÃO publique credenciais no GitHub
+_private/config.php
+*.bak
+*.backup
+*.log
+.DS_Store
