@@ -73,7 +73,27 @@ function db(): PDO {
             ]);
         return $pdo;
     } catch(Throwable $e) {
-        error_log('PetCare database unavailable: '.$e->getMessage());
+        // Apenas códigos de diagnóstico; não grava senha, SQL, endereço, usuário nem mensagem bruta.
+        $sqlState = $e instanceof PDOException ? (string)$e->getCode() : 'N/A';
+        $info = $e instanceof PDOException && is_array($e->errorInfo ?? null) ? $e->errorInfo : [];
+        $mysqlCode = isset($info[1]) && is_numeric($info[1]) ? (int)$info[1] : 0;
+        $err = strtolower($e->getMessage());
+        if (str_contains($err, 'could not find driver')) {
+            $cause = 'driver_pdo_mysql_ausente';
+        } elseif ($mysqlCode === 1045) {
+            $cause = 'usuario_ou_senha_recusados';
+        } elseif ($mysqlCode === 1044) {
+            $cause = 'sem_permissao_no_banco';
+        } elseif ($mysqlCode === 1049) {
+            $cause = 'nome_banco_incorreto';
+        } elseif (in_array($mysqlCode, [2002, 2003], true)) {
+            $cause = 'host_porta_ou_socket_indisponivel';
+        } else {
+            $cause = 'conexao_outro_erro';
+        }
+        $safeLog = '['.date('Y-m-d H:i:s').'] SQLSTATE='.$sqlState.' MYSQL='.$mysqlCode.' CAUSA='.$cause.PHP_EOL;
+        @file_put_contents(dirname(__DIR__).'/_private/diagnostico-conexao.log', $safeLog, FILE_APPEND | LOCK_EX);
+        error_log('PetCare MySQL diagnostic: SQLSTATE='.$sqlState.' MYSQL='.$mysqlCode.' CAUSA='.$cause);
         fail('Não foi possível conectar ao banco. Confira as credenciais e as permissões no cPanel.',503);
     }
 }
