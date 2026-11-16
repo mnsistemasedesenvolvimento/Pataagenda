@@ -87,7 +87,7 @@ function me(): array {
     return $r;
 }
 function admin(): array {
-    $r=me(); if ($r['role']!=='admin') fail('Acesso exclusivo do Matheus.',403);
+    $r=me(); if ($r['role']!=='admin') fail('Acesso exclusivo do Mateus.',403);
     return $r;
 }
 function required(array $input,string $key,int $max=200): string {
@@ -125,13 +125,86 @@ function resetBadLogin(): void {
     $ip=hash('sha256',(string)($_SERVER['REMOTE_ADDR']??'unknown'));
     query('DELETE FROM pet_auth_attempts WHERE ip_hash=?',[$ip]);
 }
+function registrationThrottle(): void {
+    // Registrations are tracked separately from failed logins, avoiding lockouts after a successful signup.
+    $ip=hash('sha256','signup:'.(string)($_SERVER['REMOTE_ADDR']??'unknown'));
+    $count=(int)query('SELECT COUNT(*) FROM pet_auth_attempts WHERE ip_hash=? AND created_at>DATE_SUB(NOW(),INTERVAL 1 HOUR)',[$ip])->fetchColumn();
+    if ($count>=12) fail('Muitos cadastros neste dispositivo ou rede. Tente novamente mais tarde.',429);
+    query('INSERT INTO pet_auth_attempts(ip_hash) VALUES(?)',[$ip]);
+}
+function rememberCookiePath(): string {
+    global $cookiePath;
+    return $cookiePath;
+}
+function writeRememberCookie(string $value,int $expires): void {
+    global $isHttps;
+    setcookie('MPETREM',$value,[
+        'expires'=>$expires,'path'=>rememberCookiePath(),'secure'=>$isHttps,
+        'httponly'=>true,'samesite'=>'Lax'
+    ]);
+}
+function forgetRememberCookie(): void {
+    $cookie=(string)($_COOKIE['MPETREM']??'');
+    if ($cookie!=='') {
+        $selector=explode('.',$cookie,2)[0];
+        if (preg_match('/^[a-f0-9]{24}$/',$selector)) {
+            try {query('DELETE FROM pet_remember_tokens WHERE selector=?',[$selector]);}
+            catch(Throwable $e) {error_log('Pet Super token revoke: '.$e->getMessage());}
+        }
+    }
+    writeRememberCookie('',time()-3600);
+    unset($_COOKIE['MPETREM']);
+}
+function createRememberToken(int $uid): bool {
+    global $isHttps;
+    if (!$isHttps) return false; // Never send a long-lived login token over plaintext HTTP.
+    $selector=bin2hex(random_bytes(12));
+    $validator=bin2hex(random_bytes(32));
+    $expires=time()+60*60*24*30;
+    try {
+        query('DELETE FROM pet_remember_tokens WHERE user_id=? AND expires_at < NOW()',[$uid]);
+        query('INSERT INTO pet_remember_tokens(user_id,selector,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(NOW(),INTERVAL 30 DAY))',
+          [$uid,$selector,hash('sha256',$validator)]);
+        writeRememberCookie($selector.'.'.$validator,$expires);
+        return true;
+    } catch(Throwable $e) {
+        error_log('Pet Super remember setup: '.$e->getMessage());
+        return false;
+    }
+}
+function restoreRememberedLogin(): void {
+    if (!empty($_SESSION['uid'])) return;
+    $cookie=(string)($_COOKIE['MPETREM']??'');
+    if (!preg_match('/^[a-f0-9]{24}\.[a-f0-9]{64}$/',$cookie)) return;
+    [$selector,$validator]=explode('.',$cookie,2);
+    try {
+        $r=query('SELECT user_id,token_hash FROM pet_remember_tokens WHERE selector=? AND expires_at>NOW()',[$selector])->fetch();
+        if(!$r || !hash_equals((string)$r['token_hash'],hash('sha256',$validator))){
+            forgetRememberCookie();return;
+        }
+        $exists=query('SELECT id FROM pet_users WHERE id=?',[(int)$r['user_id']])->fetchColumn();
+        if (!$exists) {forgetRememberCookie();return;}
+        session_regenerate_id(true);
+        $_SESSION['uid']=(int)$r['user_id'];
+        $_SESSION['csrf']=bin2hex(random_bytes(24));
+        // Rotate the verifier upon restoration; stolen old cookies cannot be reused.
+        $new=bin2hex(random_bytes(32));
+        query('UPDATE pet_remember_tokens SET token_hash=? WHERE selector=?',[hash('sha256',$new),$selector]);
+        writeRememberCookie($selector.'.'.$new,time()+60*60*24*30);
+    } catch(Throwable $e) {
+        error_log('Pet Super remember restore: '.$e->getMessage());
+    }
+}
+function applyRememberChoice(array $x,int $uid): bool {
+    forgetRememberCookie();
+    return !empty($x['remember_me']) && createRememberToken($uid);
+}
 function registerUser(array $x): never {
-    authThrottle();
-    markBadLogin(); // limita a criação excessiva de contas por IP
+    registrationThrottle();
     $email=strtolower(required($x,'email',190));
     if (!filter_var($email,FILTER_VALIDATE_EMAIL)) fail('Informe um e-mail válido.');
     $pass=(string)($x['password']??'');
-    if (strlen($pass)<10 || strlen($pass)>72) fail('A senha deve ter de 10 a 72 caracteres.');
+    if (strlen($pass)<8 || strlen($pass)>72) fail('A senha deve ter de 8 a 72 caracteres.');
     $name=required($x,'full_name',120); $tel=required($x,'phone',25);
     if(!phone($tel)) fail('Digite o WhatsApp com DDD.');
     $street=required($x,'street',160);$num=required($x,'house_number',25);
@@ -145,7 +218,8 @@ function registerUser(array $x): never {
         session_regenerate_id(true);
         $_SESSION['uid']=(int)db()->lastInsertId();
         $_SESSION['csrf']=bin2hex(random_bytes(24));
-        ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
+        $remembered=applyRememberChoice($x,(int)$_SESSION['uid']);
+        ok(['user'=>me(),'csrf'=>$_SESSION['csrf'],'remember_active'=>$remembered]);
     }catch(PDOException $e){if($e->getCode()==='23000')fail('Este e-mail já está cadastrado. Entre com sua senha.',409);throw $e;}
 }
 function userProfile(array $x,int $id): never {
@@ -188,7 +262,7 @@ function book(array $x,array $u): never {
         $bookId=(int)$pdo->lastInsertId();
         query('INSERT INTO pet_slots(visit_date,visit_time,state,booking_id) VALUES(?,?,\'pending\',?)',[$date,$time.':00',$bookId]);
         $pdo->commit();
-        ok(['booking_id'=>$bookId,'message'=>'Solicitação enviada ao Matheus!']);
+        ok(['booking_id'=>$bookId,'message'=>'Solicitação enviada ao Mateus!']);
     }catch(PDOException $e){if($pdo->inTransaction())$pdo->rollBack();if($e->getCode()==='23000')fail('Esse horário acabou de ser reservado. Escolha outro.',409);throw $e;}
 }
 function releaseBooking(int $id, string $state, int $owner=0): never {
@@ -219,6 +293,7 @@ function manualSave(array $x): never {
 try {
     $action=clean($_GET['action']??'',50);
     $verb=$_SERVER['REQUEST_METHOD']??'GET';
+    restoreRememberedLogin();
     if($verb==='POST')requirePost();
     if($action==='bootstrap'&&$verb==='GET'){
         ok(['csrf'=>$_SESSION['csrf'],'logged_in'=>!empty($_SESSION['uid']),'timezone'=>'America/Sao_Paulo','hours'=>workingHours()]);
@@ -237,18 +312,37 @@ try {
     if($action==='register'&&$verb==='POST')registerUser(data());
     if($action==='login'&&$verb==='POST'){
         authThrottle();$x=data();$email=strtolower(clean($x['email']??'',190));$pass=(string)($x['password']??'');
+        if(!filter_var($email,FILTER_VALIDATE_EMAIL)||$pass==='')fail('Informe o e-mail e a senha do cadastro.',422);
         $u=query('SELECT id,password_hash FROM pet_users WHERE email=?',[$email])->fetch();
-        if(!$u || !password_verify($pass,$u['password_hash'])){markBadLogin();fail('E-mail ou senha incorretos.',401);}
+        if(!$u || !password_verify($pass,(string)$u['password_hash'])){markBadLogin();fail('E-mail ou senha incorretos. Se não tem conta, use Criar cadastro.',401);}
         resetBadLogin();session_regenerate_id(true);
         $_SESSION['uid']=(int)$u['id'];$_SESSION['csrf']=bin2hex(random_bytes(24));
-        ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
+        $remembered=applyRememberChoice($x,(int)$u['id']);
+        ok(['user'=>me(),'csrf'=>$_SESSION['csrf'],'remember_active'=>$remembered]);
     }
     if($action==='logout'&&$verb==='POST'){
+        forgetRememberCookie();
         $_SESSION=[];session_regenerate_id(true);
         $_SESSION['csrf']=bin2hex(random_bytes(24));ok(['csrf'=>$_SESSION['csrf']]);
     }
     if($action==='me'&&$verb==='GET')ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
     if($action==='update_profile'&&$verb==='POST')userProfile(data(),(int)me()['id']);
+    if($action==='change_password'&&$verb==='POST'){
+        $u=me();$x=data();
+        $old=(string)($x['current_password']??'');
+        $new=(string)($x['new_password']??'');
+        if(strlen($new)<10||strlen($new)>72)fail('A nova senha deve ter de 10 a 72 caracteres.');
+        if(hash_equals($old,$new))fail('Escolha uma senha diferente da atual.');
+        $hash=query('SELECT password_hash FROM pet_users WHERE id=?',[(int)$u['id']])->fetchColumn();
+        if(!$hash||!password_verify($old,(string)$hash))fail('A senha atual está incorreta.',401);
+        query('UPDATE pet_users SET password_hash=? WHERE id=?',[password_hash($new,PASSWORD_DEFAULT),(int)$u['id']]);
+        try{query('DELETE FROM pet_remember_tokens WHERE user_id=?',[(int)$u['id']]);}catch(Throwable $ignore){error_log('Pet Super token cleanup: '.$ignore->getMessage());}
+        forgetRememberCookie();
+        session_regenerate_id(true);
+        $_SESSION['csrf']=bin2hex(random_bytes(24));
+        ok(['message'=>'Senha alterada com sucesso.','csrf'=>$_SESSION['csrf']]);
+    }
+
     if($action==='pets'&&$verb==='GET')ok(['pets'=>query('SELECT id,user_id,name,species,breed,care_notes,created_at FROM pet_pets WHERE user_id=? AND active=1 ORDER BY created_at DESC',[(int)me()['id']])->fetchAll()]);
     if($action==='pet_save'&&$verb==='POST')petUpsert(data(),(int)me()['id']);
     if($action==='pet_remove'&&$verb==='POST'){
@@ -311,6 +405,31 @@ try {
         admin();$x=data();$state=clean($x['status']??'',20);
         if(!in_array($state,['confirmed','declined'],true))fail('Ação não permitida.');
         releaseBooking((int)($x['id']??0),$state);
+    }
+    if($action==='admin_day_availability'&&$verb==='POST'){
+        admin();$x=data();
+        $day=clean($x['visit_date']??'',10);
+        $mode=clean($x['mode']??'',12);
+        if(!in_array($mode,['open','close'],true))fail('Ação inválida.',422);
+        $dt=DateTimeImmutable::createFromFormat('!Y-m-d',$day);
+        $now=new DateTimeImmutable();
+        if(!$dt||$dt->format('Y-m-d')!==$day||$dt<$now->setTime(0,0)||$dt>$now->modify('+365 days')||(int)$dt->format('w')===0)
+          fail('Selecione uma data válida, de segunda a sábado.',422);
+        $pdo=db();$changed=0;
+        try {
+            $pdo->beginTransaction();
+            foreach(workingHours() as $hour) {
+                // Never touch bookings (pending/confirmed) or slots in the past.
+                if(new DateTimeImmutable($day.' '.$hour)<=$now)continue;
+                if($mode==='close') {
+                    $changed+=query('INSERT IGNORE INTO pet_slots(visit_date,visit_time,state) VALUES(?,?,\'blocked\')',[$day,$hour.':00'])->rowCount();
+                } else {
+                    $changed+=query('DELETE FROM pet_slots WHERE visit_date=? AND visit_time=? AND state=\'blocked\'',[$day,$hour.':00'])->rowCount();
+                }
+            }
+            $pdo->commit();
+            ok(['changed'=>$changed,'message'=>$mode==='open'?'Horários liberados.':'Horários livres bloqueados.']);
+        } catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
     }
     if($action==='admin_toggle_block'&&$verb==='POST'){
         admin();$x=data();$date=clean($x['visit_date']??'',10);$time=clean($x['visit_time']??'',5);
