@@ -9,20 +9,10 @@ const dateISO=(y,m,d)=>`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2
 const nowBR=()=>new Date(new Date().toLocaleString('en-US',{timeZone:'America/Sao_Paulo'}));
 const today=()=>{const n=nowBR();return dateISO(n.getFullYear(),n.getMonth()+1,n.getDate())};
 const hours=['08:00','09:00','10:00','11:00','13:00','14:00','15:00','16:00','17:00'];
-function firstFreeDay(y,m,slots){
- const now=nowBR();const todayDate=dateISO(now.getFullYear(),now.getMonth()+1,now.getDate());
- const total=new Date(y,m,0).getDate();
- for(let d=1;d<=total;d++){
-  const date=dateISO(y,m,d);if(date<todayDate||new Date(y,m-1,d).getDay()===0)continue;
-  if(hours.some(h=>new Date(date+'T'+h+':00')>now&&!slots.some(s=>s.visit_date===date&&s.visit_time===h)))return date;
- }
- return '';
-}
 function toast(msg,error=false){let e=$('#toast');if(!e){e=document.createElement('div');e.id='toast';document.body.appendChild(e);}e.className='toast'+(error?' error':'');e.textContent=msg;e.classList.remove('hidden');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>e.classList.add('hidden'),4800);}
 function formData(form){const x=Object.fromEntries(new FormData(form).entries());for(const c of form.querySelectorAll('input[type=checkbox]'))x[c.name]=c.checked;return x}
-async function api(action,body=null,params={}){
- const qs=new URLSearchParams({action,...params});
- const url='api/index.php?'+qs.toString();
+async function api(action,body=null){
+ const url='api/index.php?action='+encodeURIComponent(action);
  const init={credentials:'same-origin',headers:{'Accept':'application/json'}};
  if(body!==null){init.method='POST';init.headers['Content-Type']='application/json';init.headers['X-CSRF-Token']=csrf;init.body=JSON.stringify(body);}
  let res;try{res=await fetch(url,init)}catch(e){throw Error('Sem conexão com o servidor. Verifique internet e hospedagem.');}
@@ -42,8 +32,7 @@ function calendar(grid, y,m, slots,chosen,selectDay,adminMode=false){
  for(let i=0;i<first;i++)html+='<span class="day empty-day"></span>';
  for(let d=1;d<=total;d++){
    const date=dateISO(y,m,d),sunday=new Date(y,m-1,d).getDay()===0,past=date<today(),dayCount=slots.filter(x=>x.visit_date===date).length;
-   const now=nowBR();const freeFutureHours=hours.filter(h=>!slots.some(x=>x.visit_date===date&&x.visit_time===h)&&new Date(date+'T'+h+':00')>now).length;
-   const allBusy=freeFutureHours===0;const unavailable=sunday||past||(allBusy&&!adminMode);
+   const allBusy=dayCount>=hours.length;const unavailable=sunday||past||(allBusy&&!adminMode);
    html+=`<button type="button" class="day ${unavailable?'unavailable':dayCount?'busy':'active'} ${chosen===date?'selected':''}" data-day="${date}" ${unavailable?'disabled':''}><span>${d}</span>${!unavailable?'<small></small>':''}</button>`;
  }
  grid.innerHTML=html;grid.querySelectorAll('[data-day]').forEach(b=>b.addEventListener('click',()=>selectDay(b.dataset.day)));
@@ -57,5 +46,5 @@ function slotButtons(box,date,slots,chosen,selectTime,adminMode=false){
  }).join('');
  box.querySelectorAll('[data-time]').forEach(b=>b.addEventListener('click',()=>selectTime(b.dataset.time)));
 }
-window.MPET={api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,whats,calendar,slotButtons,firstFreeDay};
+window.MPET={api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,whats,calendar,slotButtons};
 })();

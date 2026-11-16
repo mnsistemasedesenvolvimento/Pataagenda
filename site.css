@@ -130,28 +130,3 @@ button, input,textarea,select{font:inherit}
 .btn.float-help{animation:point-and-return 1.6s ease-in-out infinite;box-shadow:0 8px 22px #0e503c27}
 .mobileOnly{display:none}
 @media(max-width:620px){.help-steps{gap:7px}.help-steps>div{padding:9px}.form-grid{grid-template-columns:1fr}.form-grid .span2{grid-column:auto}.card-grid{grid-template-columns:1fr}.modal{padding:20px 16px;border-radius:24px 24px 16px 16px}.mobileOnly{display:inline}.calendar-block{padding:13px}.slot-list{gap:6px}}
-
-/* V6 — calendário público, navegação e estados informativos */
-.public-preview{margin-bottom:26px}
-.public-preview-top{display:flex;justify-content:space-between;align-items:center;gap:15px;margin:0 0 14px}
-.public-preview-top h2{margin:4px 0 6px;font-size:clamp(21px,4vw,27px)}
-.public-preview-top p{margin:0;max-width:580px}
-.live-tag{display:flex;align-items:center;gap:7px;border:1px solid #bde4c7;border-radius:999px;color:#247753;background:#e9f9ec;white-space:nowrap;padding:8px 11px;font-size:11px;font-weight:800}
-.live-tag i{width:8px;height:8px;display:inline-block;background:#39ae6c;border-radius:50%;box-shadow:0 0 0 3px #3ab16d22}
-.public-calendar-layout{background:linear-gradient(170deg,#ffffff,#fafffa);border:1px solid #d3e4d7;box-shadow:0 13px 40px #14452d13}
-.public-calendar-layout .day{min-height:52px}
-.public-calendar-layout .public-slots{padding-top:15px;margin-top:14px;border-top:1px solid #e3ece4}
-.public-slots h3{font-size:15px;margin-bottom:5px}
-.legend-inline{display:flex;flex-wrap:wrap;gap:9px;font-size:11px;color:#6f8177;margin:10px 0 0}
-.sync-message{font-size:11px;color:#477a5d;margin:8px 0 12px;min-height:18px}
-.sync-message.bad,#publicStatus.bad{color:#ba4c4c}
-.progress-steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
-.progress-steps span{padding:7px 9px;border-radius:9px;background:#eaf6ee;font-size:10px;font-weight:760;color:#416c55}
-.soft-divider{border:0;border-top:1px solid #e0eae2;margin:21px 0}
-#authSection{scroll-margin-top:25px}
-#publicPreview .calendar-block{max-width:750px;margin:auto}
-#publicPreview .day:focus-visible{outline:3px solid #ffa764}
-#publicPreview button:not(:disabled):hover{filter:brightness(.985)}
-#publicPreview .slot:not(:disabled){box-shadow:inset 0 0 0 1px #c6e6d0}
-#publicStatus{min-height:18px}
-@media(max-width:680px){.public-preview-top{align-items:flex-start;flex-direction:column;gap:8px}.live-tag{padding:6px 9px}.public-preview-top h2{font-size:21px}.public-calendar-layout{padding:13px}.public-calendar-layout .day{min-height:47px}.legend-inline{gap:6px;font-size:10px}}
