@@ -1,13 +1,10 @@
 <?php
-/**
- * Matheus Pet Care — configuração privada.
- * Preencha com os dados criados em cPanel > Banco de dados.
- * Nunca envie senhas pelo chat ou coloque este arquivo no GitHub público.
- */
+// Exemplo de configuração. NÃO coloque sua senha neste repositório público.
+// No cPanel, mantenha o arquivo real _private/config.php, fora do GitHub.
 return [
-    'db_host' => 'localhost',
-    'db_name' => 'COLOQUE_NOME_COMPLETO_DO_BANCO',
-    'db_user' => 'COLOQUE_USUARIO_COMPLETO',
-    'db_pass' => 'COLOQUE_SENHA_DO_USUARIO_MYSQL',
+    'db_host' => '127.0.0.1',
+    'db_name' => 'marce7856_petcare',
+    'db_user' => 'marce7856_petapp',
+    'db_pass' => 'PREENCHA_APENAS_NO_CPANEL',
     'timezone' => 'America/Sao_Paulo',
 ];

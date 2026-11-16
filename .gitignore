@@ -1,6 +1,14 @@
-# NÃO publique credenciais no GitHub
-_private/config.php
-*.bak
-*.backup
+# Senhas e configurações particulares; nunca enviar ao GitHub
+/_private/config.php
+/config.php
+.env
+.env.*
 *.log
+*.bak
+*.old
+*.zip
+*backup*
+*diagnostico*
+verificar_*.php
 .DS_Store
+Thumbs.db
