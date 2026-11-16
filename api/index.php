@@ -73,27 +73,7 @@ function db(): PDO {
             ]);
         return $pdo;
     } catch(Throwable $e) {
-        // Apenas códigos de diagnóstico; não grava senha, SQL, endereço, usuário nem mensagem bruta.
-        $sqlState = $e instanceof PDOException ? (string)$e->getCode() : 'N/A';
-        $info = $e instanceof PDOException && is_array($e->errorInfo ?? null) ? $e->errorInfo : [];
-        $mysqlCode = isset($info[1]) && is_numeric($info[1]) ? (int)$info[1] : 0;
-        $err = strtolower($e->getMessage());
-        if (str_contains($err, 'could not find driver')) {
-            $cause = 'driver_pdo_mysql_ausente';
-        } elseif ($mysqlCode === 1045) {
-            $cause = 'usuario_ou_senha_recusados';
-        } elseif ($mysqlCode === 1044) {
-            $cause = 'sem_permissao_no_banco';
-        } elseif ($mysqlCode === 1049) {
-            $cause = 'nome_banco_incorreto';
-        } elseif (in_array($mysqlCode, [2002, 2003], true)) {
-            $cause = 'host_porta_ou_socket_indisponivel';
-        } else {
-            $cause = 'conexao_outro_erro';
-        }
-        $safeLog = '['.date('Y-m-d H:i:s').'] SQLSTATE='.$sqlState.' MYSQL='.$mysqlCode.' CAUSA='.$cause.PHP_EOL;
-        @file_put_contents(dirname(__DIR__).'/_private/diagnostico-conexao.log', $safeLog, FILE_APPEND | LOCK_EX);
-        error_log('PetCare MySQL diagnostic: SQLSTATE='.$sqlState.' MYSQL='.$mysqlCode.' CAUSA='.$cause);
+        error_log('PetCare database unavailable: '.$e->getMessage());
         fail('Não foi possível conectar ao banco. Confira as credenciais e as permissões no cPanel.',503);
     }
 }
@@ -269,6 +249,20 @@ try {
     }
     if($action==='me'&&$verb==='GET')ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
     if($action==='update_profile'&&$verb==='POST')userProfile(data(),(int)me()['id']);
+    if($action==='change_password'&&$verb==='POST'){
+        $u=me();$x=data();
+        $old=(string)($x['current_password']??'');
+        $new=(string)($x['new_password']??'');
+        if(strlen($new)<10||strlen($new)>72)fail('A nova senha deve ter de 10 a 72 caracteres.');
+        if(hash_equals($old,$new))fail('Escolha uma senha diferente da atual.');
+        $hash=query('SELECT password_hash FROM pet_users WHERE id=?',[(int)$u['id']])->fetchColumn();
+        if(!$hash||!password_verify($old,(string)$hash))fail('A senha atual está incorreta.',401);
+        query('UPDATE pet_users SET password_hash=? WHERE id=?',[password_hash($new,PASSWORD_DEFAULT),(int)$u['id']]);
+        session_regenerate_id(true);
+        $_SESSION['csrf']=bin2hex(random_bytes(24));
+        ok(['message'=>'Senha alterada com sucesso.','csrf'=>$_SESSION['csrf']]);
+    }
+
     if($action==='pets'&&$verb==='GET')ok(['pets'=>query('SELECT id,user_id,name,species,breed,care_notes,created_at FROM pet_pets WHERE user_id=? AND active=1 ORDER BY created_at DESC',[(int)me()['id']])->fetchAll()]);
     if($action==='pet_save'&&$verb==='POST')petUpsert(data(),(int)me()['id']);
     if($action==='pet_remove'&&$verb==='POST'){
