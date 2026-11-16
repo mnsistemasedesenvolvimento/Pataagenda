@@ -18,7 +18,7 @@ function firstFreeDay(y,m,slots){
  }
  return '';
 }
-function toast(msg,error=false){let e=$('#toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');e.setAttribute('aria-live','polite');document.body.appendChild(e);}e.setAttribute('role',error?'alert':'status');e.setAttribute('aria-live',error?'assertive':'polite');e.textContent=msg;e.className='toast'+(error?' error':'')+' show';clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>e.classList.remove('show'),6500);}
+function toast(msg,error=false){let e=$('#toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');e.setAttribute('aria-live','polite');document.body.appendChild(e);}e.setAttribute('role',error?'alert':'status');e.setAttribute('aria-live',error?'assertive':'polite');e.textContent=msg;e.className='toast'+(error?' error':'')+' show';e.dataset.type=error?'error':'success';clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>e.classList.remove('show'),6500);}
 function formData(form){const x=Object.fromEntries(new FormData(form).entries());for(const c of form.querySelectorAll('input[type=checkbox]'))x[c.name]=c.checked;return x}
 async function api(action,body=null,params={},retried=false){
  const qs=new URLSearchParams({action,...params});

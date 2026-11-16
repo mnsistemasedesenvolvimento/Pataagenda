@@ -86,6 +86,11 @@ function me(): array {
     if (!$r) {$_SESSION=[];fail('Sessão inválida. Entre novamente.',401);}
     return $r;
 }
+function client(): array {
+    $r=me();
+    if ($r['role']!=='client') fail('Esta conta é administrativa. Saia do painel para entrar como cliente.',403);
+    return $r;
+}
 function admin(): array {
     $r=me(); if ($r['role']!=='admin') fail('Acesso exclusivo do Mateus.',403);
     return $r;
@@ -149,7 +154,7 @@ function forgetRememberCookie(): void {
         $selector=explode('.',$cookie,2)[0];
         if (preg_match('/^[a-f0-9]{24}$/',$selector)) {
             try {query('DELETE FROM pet_remember_tokens WHERE selector=?',[$selector]);}
-            catch(Throwable $e) {error_log('Pet Super token revoke: '.$e->getMessage());}
+            catch(Throwable $e) {error_log('Pet Sitter token revoke: '.$e->getMessage());}
         }
     }
     writeRememberCookie('',time()-3600);
@@ -168,7 +173,7 @@ function createRememberToken(int $uid): bool {
         writeRememberCookie($selector.'.'.$validator,$expires);
         return true;
     } catch(Throwable $e) {
-        error_log('Pet Super remember setup: '.$e->getMessage());
+        error_log('Pet Sitter remember setup: '.$e->getMessage());
         return false;
     }
 }
@@ -192,7 +197,7 @@ function restoreRememberedLogin(): void {
         query('UPDATE pet_remember_tokens SET token_hash=? WHERE selector=?',[hash('sha256',$new),$selector]);
         writeRememberCookie($selector.'.'.$new,time()+60*60*24*30);
     } catch(Throwable $e) {
-        error_log('Pet Super remember restore: '.$e->getMessage());
+        error_log('Pet Sitter remember restore: '.$e->getMessage());
     }
 }
 function applyRememberChoice(array $x,int $uid): bool {
@@ -200,6 +205,11 @@ function applyRememberChoice(array $x,int $uid): bool {
     return !empty($x['remember_me']) && createRememberToken($uid);
 }
 function registerUser(array $x): never {
+    if (!empty($_SESSION['uid'])) {
+        $current=me();
+        if ($current['role']==='admin') fail('Saia da conta de administrador antes de cadastrar um cliente.',403);
+        fail('Você já está conectado. Saia para criar outra conta.',409);
+    }
     registrationThrottle();
     $email=strtolower(required($x,'email',190));
     if (!filter_var($email,FILTER_VALIDATE_EMAIL)) fail('Informe um e-mail válido.');
@@ -315,6 +325,12 @@ try {
         if(!filter_var($email,FILTER_VALIDATE_EMAIL)||$pass==='')fail('Informe o e-mail e a senha do cadastro.',422);
         $u=query('SELECT id,password_hash FROM pet_users WHERE email=?',[$email])->fetch();
         if(!$u || !password_verify($pass,(string)$u['password_hash'])){markBadLogin();fail('E-mail ou senha incorretos. Se não tem conta, use Criar cadastro.',401);}
+        // Reject credentials used in the wrong access area BEFORE changing the session.
+        $role=(string)query('SELECT role FROM pet_users WHERE id=?',[(int)$u['id']])->fetchColumn();
+        $audience=clean($x['audience']??'',10);
+        if ($audience==='client' && $role!=='client') fail('Esta conta é do administrador. Use a entrada Administrador.',403);
+        if ($audience==='admin' && $role!=='admin') fail('Esta conta é de cliente. Use Quero agendar.',403);
+        if ($audience!=='' && !in_array($audience,['client','admin'],true)) fail('Área de login inválida.',422);
         resetBadLogin();session_regenerate_id(true);
         $_SESSION['uid']=(int)$u['id'];$_SESSION['csrf']=bin2hex(random_bytes(24));
         $remembered=applyRememberChoice($x,(int)$u['id']);
@@ -326,7 +342,7 @@ try {
         $_SESSION['csrf']=bin2hex(random_bytes(24));ok(['csrf'=>$_SESSION['csrf']]);
     }
     if($action==='me'&&$verb==='GET')ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
-    if($action==='update_profile'&&$verb==='POST')userProfile(data(),(int)me()['id']);
+    if($action==='update_profile'&&$verb==='POST')userProfile(data(),(int)client()['id']);
     if($action==='change_password'&&$verb==='POST'){
         $u=me();$x=data();
         $old=(string)($x['current_password']??'');
@@ -336,24 +352,24 @@ try {
         $hash=query('SELECT password_hash FROM pet_users WHERE id=?',[(int)$u['id']])->fetchColumn();
         if(!$hash||!password_verify($old,(string)$hash))fail('A senha atual está incorreta.',401);
         query('UPDATE pet_users SET password_hash=? WHERE id=?',[password_hash($new,PASSWORD_DEFAULT),(int)$u['id']]);
-        try{query('DELETE FROM pet_remember_tokens WHERE user_id=?',[(int)$u['id']]);}catch(Throwable $ignore){error_log('Pet Super token cleanup: '.$ignore->getMessage());}
+        try{query('DELETE FROM pet_remember_tokens WHERE user_id=?',[(int)$u['id']]);}catch(Throwable $ignore){error_log('Pet Sitter token cleanup: '.$ignore->getMessage());}
         forgetRememberCookie();
         session_regenerate_id(true);
         $_SESSION['csrf']=bin2hex(random_bytes(24));
         ok(['message'=>'Senha alterada com sucesso.','csrf'=>$_SESSION['csrf']]);
     }
 
-    if($action==='pets'&&$verb==='GET')ok(['pets'=>query('SELECT id,user_id,name,species,breed,care_notes,created_at FROM pet_pets WHERE user_id=? AND active=1 ORDER BY created_at DESC',[(int)me()['id']])->fetchAll()]);
-    if($action==='pet_save'&&$verb==='POST')petUpsert(data(),(int)me()['id']);
+    if($action==='pets'&&$verb==='GET')ok(['pets'=>query('SELECT id,user_id,name,species,breed,care_notes,created_at FROM pet_pets WHERE user_id=? AND active=1 ORDER BY created_at DESC',[(int)client()['id']])->fetchAll()]);
+    if($action==='pet_save'&&$verb==='POST')petUpsert(data(),(int)client()['id']);
     if($action==='pet_remove'&&$verb==='POST'){
-        $u=me();$x=data();$id=(int)($x['id']??0);
+        $u=client();$x=data();$id=(int)($x['id']??0);
         $has=query('SELECT id FROM pet_bookings WHERE pet_id=? AND user_id=? AND status IN(\'pending\',\'confirmed\') LIMIT 1',[$id,(int)$u['id']])->fetch();
         if($has)fail('Este pet possui visitas pendentes ou confirmadas. Cancele antes de excluir.',409);
         query('UPDATE pet_pets SET active=0 WHERE id=? AND user_id=?',[$id,(int)$u['id']]);ok();
     }
-    if($action==='bookings'&&$verb==='GET')ok(['bookings'=>bookingItems(me())]);
-    if($action==='book'&&$verb==='POST')book(data(),me());
-    if($action==='cancel_booking'&&$verb==='POST')releaseBooking((int)(data()['id']??0),'cancelled',(int)me()['id']);
+    if($action==='bookings'&&$verb==='GET')ok(['bookings'=>bookingItems(client())]);
+    if($action==='book'&&$verb==='POST')book(data(),client());
+    if($action==='cancel_booking'&&$verb==='POST')releaseBooking((int)(data()['id']??0),'cancelled',(int)client()['id']);
 
     if($action==='admin_dashboard'&&$verb==='GET'){
         admin();
