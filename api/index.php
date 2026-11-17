@@ -5,26 +5,88 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
+// A GitHub Pages page may call this API directly, but never receives a MySQL password.
+// Exact-origin CORS: no wildcard and no cross-domain cookies.
+$githubOrigin = 'https://mnsistemasedesenvolvimento.github.io';
+$requestOrigin = rtrim((string)($_SERVER['HTTP_ORIGIN'] ?? ''), '/');
+$externalRequest = $requestOrigin === $githubOrigin;
+// Área determinada pela rota e nunca usada como autorização: role do banco ainda é conferida.
+$accessArea = (string)($_GET['area'] ?? 'client');
+if (!in_array($accessArea, ['client', 'admin'], true)) {
+    http_response_code(400);
+    echo json_encode(['ok'=>false,'error'=>'Área de acesso inválida.']);
+    exit;
+}
+$sessionName = $accessArea === 'admin' ? 'MPETADMSESS' : 'MPETCLISESS';
+$rememberCookieName = $accessArea === 'admin' ? 'MPETADMREM' : 'MPETCLIREM';
 
-$config = require dirname(__DIR__) . '/_private/config.php';
+if ($externalRequest) {
+    header('Access-Control-Allow-Origin: '.$githubOrigin);
+    header('Vary: Origin');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, X-Pet-Token');
+    header('Access-Control-Max-Age: 600');
+} elseif ($requestOrigin !== '') {
+    $originHost = strtolower((string)parse_url($requestOrigin, PHP_URL_HOST));
+    $currentHost = strtolower(explode(':', (string)($_SERVER['HTTP_HOST'] ?? ''))[0]);
+    if ($originHost !== $currentHost) {
+        http_response_code(403);
+        echo json_encode(['ok'=>false,'error'=>'Origem não autorizada.']);
+        exit;
+    }
+}
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
+    http_response_code($externalRequest ? 204 : 403);
+    exit;
+}
+
+// Captura e descarta eventual espaço em branco/BOM antes do <?php no
+// config.php. Sem isso, session_start() não consegue enviar os cabeçalhos
+// e as respostas da API deixam de ser JSON válido.
+$configFile = dirname(__DIR__) . '/_private/config.php';
+if (!is_file($configFile)) {
+    http_response_code(503);
+    echo json_encode(['ok'=>false,'error'=>'Configuração ausente no cPanel: _private/config.php.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+ob_start();
+try {
+    $config = require $configFile;
+} finally {
+    $configOutput = ob_get_clean();
+    if ($configOutput !== '') {
+        error_log('PetCare config.php enviou conteúdo antes do PHP; conteúdo descartado para proteger a sessão.');
+    }
+}
+if (!is_array($config) || !isset($config['db_host'],$config['db_name'],$config['db_user'],$config['db_pass'])) {
+    http_response_code(503);
+    echo json_encode(['ok'=>false,'error'=>'Configuração MySQL incompleta. Confira _private/config.php.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 date_default_timezone_set($config['timezone'] ?? 'America/Sao_Paulo');
 $isHttps = !empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off';
 $cookiePath = dirname(dirname($_SERVER['SCRIPT_NAME'] ?? '/api/index.php'));
 $cookiePath = $cookiePath === '/' ? '/' : rtrim($cookiePath, '/') . '/';
-ini_set('session.use_strict_mode','1');
-session_name('MPETCARESESS');
-session_set_cookie_params([
-    'lifetime' => 0, 'path' => $cookiePath, 'secure' => $isHttps,
-    'httponly' => true, 'samesite' => 'Lax'
-]);
-session_start();
-if (!isset($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(24));
-if (isset($_SESSION['last_seen']) && time() - (int)$_SESSION['last_seen'] > 43200) {
-    $_SESSION = [];
-    session_regenerate_id(true);
-    $_SESSION['csrf'] = bin2hex(random_bytes(24));
+if ($externalRequest) {
+    // GitHub Pages is another origin. Do NOT rely on third-party PHP cookies.
+    // Each request is authenticated by a revocable token, verified against MySQL.
+    $_SESSION = ['csrf' => bin2hex(random_bytes(24))];
+} else {
+    ini_set('session.use_strict_mode', '1');
+    session_name($sessionName);
+    session_set_cookie_params([
+        'lifetime' => 0, 'path' => $cookiePath, 'secure' => $isHttps,
+        'httponly' => true, 'samesite' => 'Lax'
+    ]);
+    session_start();
+    if (!isset($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(24));
+    if (isset($_SESSION['last_seen']) && time() - (int)$_SESSION['last_seen'] > 43200) {
+        $_SESSION = [];
+        session_regenerate_id(true);
+        $_SESSION['csrf'] = bin2hex(random_bytes(24));
+    }
+    $_SESSION['last_seen'] = time();
 }
-$_SESSION['last_seen'] = time();
 
 function done(array $body, int $code=200): never {
     http_response_code($code);
@@ -46,7 +108,15 @@ function data(): array {
     return $value;
 }
 function requirePost(): void {
+    global $externalRequest;
     if (($_SERVER['REQUEST_METHOD']??'GET')!=='POST') fail('Use POST.',405);
+    if ($externalRequest) {
+        // Browser-origin authenticated tokens are not cookies; therefore no CSRF token is needed.
+        // Only JSON POSTs from the exact trusted GitHub origin are accepted.
+        if (!str_starts_with(strtolower((string)($_SERVER['CONTENT_TYPE']??'')), 'application/json'))
+            fail('Use JSON no envio.',415);
+        return;
+    }
     $token=(string)($_SERVER['HTTP_X_CSRF_TOKEN']??'');
     if (!hash_equals((string)($_SESSION['csrf']??''), $token)) fail('Sessão expirada. Atualize a página.',419);
     $origin=$_SERVER['HTTP_ORIGIN']??'';
@@ -80,6 +150,43 @@ function db(): PDO {
 function query(string $sql,array $params=[]): PDOStatement {
     $q=db()->prepare($sql); $q->execute($params);return $q;
 }
+// External login tokens: 256 bits of random data, only SHA-256 hashes in MySQL.
+// This is independent of PHP's first-party sessions, which remain supported on cPanel.
+function externalUserFromHeader(): void {
+    global $externalRequest;
+    if (!$externalRequest) return;
+    $token=(string)($_SERVER['HTTP_X_PET_TOKEN']??'');
+    if ($token === '') return;
+    if (!preg_match('/^[a-f0-9]{64}$/', $token)) fail('Acesso inválido. Entre novamente.', 401);
+    $record=query('SELECT user_id FROM pet_external_tokens WHERE token_hash=? AND expires_at>NOW() LIMIT 1',
+                  [hash('sha256',$token)])->fetch();
+    if (!$record) fail('Seu login expirou. Entre novamente.',401);
+    $accountRole=query('SELECT role FROM pet_users WHERE id=?',[(int)$record['user_id']])->fetchColumn();
+    if ($accountRole !== $GLOBALS['accessArea'])
+        fail('Esta conta pertence a outra área. Entre pela opção correta.',403);
+    $_SESSION['uid']=(int)$record['user_id'];
+}
+function externalAuthData(array $input, int $userId): array {
+    global $externalRequest;
+    if (!$externalRequest) {
+        return ['remember_active' => applyRememberChoice($input,$userId)];
+    }
+    $remember=!empty($input['remember_me']);
+    $ttl=$remember ? 2592000 : 43200;
+    $raw=bin2hex(random_bytes(32));
+    // Requires instalacao/atualizar_v10.sql. Failure is reported without exposing credentials.
+    query('INSERT INTO pet_external_tokens(user_id,token_hash,expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL '.$ttl.' SECOND))',
+        [$userId,hash('sha256',$raw)]);
+    return ['api_token'=>$raw, 'remember_active'=>$remember, 'token_expires_in'=>$ttl];
+}
+function revokeExternalToken(): void {
+    global $externalRequest;
+    if (!$externalRequest) return;
+    $token=(string)($_SERVER['HTTP_X_PET_TOKEN']??'');
+    if (preg_match('/^[a-f0-9]{64}$/',$token))
+        query('DELETE FROM pet_external_tokens WHERE token_hash=?',[hash('sha256',$token)]);
+}
+
 function me(): array {
     if (empty($_SESSION['uid'])) fail('Entre na sua conta.',401);
     $r=query('SELECT id,role,email,full_name,phone,street,house_number,neighborhood,city,reference,notes,favorite,monthly_frequency,created_at FROM pet_users WHERE id=?',[(int)$_SESSION['uid']])->fetch();
@@ -143,13 +250,13 @@ function rememberCookiePath(): string {
 }
 function writeRememberCookie(string $value,int $expires): void {
     global $isHttps;
-    setcookie('MPETREM',$value,[
+    setcookie($GLOBALS['rememberCookieName'],$value,[
         'expires'=>$expires,'path'=>rememberCookiePath(),'secure'=>$isHttps,
         'httponly'=>true,'samesite'=>'Lax'
     ]);
 }
 function forgetRememberCookie(): void {
-    $cookie=(string)($_COOKIE['MPETREM']??'');
+    $cookie=(string)($_COOKIE[$GLOBALS['rememberCookieName']]??'');
     if ($cookie!=='') {
         $selector=explode('.',$cookie,2)[0];
         if (preg_match('/^[a-f0-9]{24}$/',$selector)) {
@@ -158,7 +265,7 @@ function forgetRememberCookie(): void {
         }
     }
     writeRememberCookie('',time()-3600);
-    unset($_COOKIE['MPETREM']);
+    unset($_COOKIE[$GLOBALS['rememberCookieName']]);
 }
 function createRememberToken(int $uid): bool {
     global $isHttps;
@@ -179,7 +286,7 @@ function createRememberToken(int $uid): bool {
 }
 function restoreRememberedLogin(): void {
     if (!empty($_SESSION['uid'])) return;
-    $cookie=(string)($_COOKIE['MPETREM']??'');
+    $cookie=(string)($_COOKIE[$GLOBALS['rememberCookieName']]??'');
     if (!preg_match('/^[a-f0-9]{24}\.[a-f0-9]{64}$/',$cookie)) return;
     [$selector,$validator]=explode('.',$cookie,2);
     try {
@@ -187,9 +294,9 @@ function restoreRememberedLogin(): void {
         if(!$r || !hash_equals((string)$r['token_hash'],hash('sha256',$validator))){
             forgetRememberCookie();return;
         }
-        $exists=query('SELECT id FROM pet_users WHERE id=?',[(int)$r['user_id']])->fetchColumn();
+        $exists=query('SELECT id FROM pet_users WHERE id=? AND role=?',[(int)$r['user_id'],$GLOBALS['accessArea']])->fetchColumn();
         if (!$exists) {forgetRememberCookie();return;}
-        session_regenerate_id(true);
+        if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
         $_SESSION['uid']=(int)$r['user_id'];
         $_SESSION['csrf']=bin2hex(random_bytes(24));
         // Rotate the verifier upon restoration; stolen old cookies cannot be reused.
@@ -225,11 +332,11 @@ function registerUser(array $x): never {
     try{
         query('INSERT INTO pet_users (role,email,password_hash,full_name,phone,street,house_number,neighborhood,city,reference,notes) VALUES (\'client\',?,?,?,?,?,?,?,?,?,?)',
           [$email,password_hash($pass,PASSWORD_DEFAULT),$name,$tel,$street,$num,$neighborhood,$city,$reference,$notes]);
-        session_regenerate_id(true);
+        if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
         $_SESSION['uid']=(int)db()->lastInsertId();
         $_SESSION['csrf']=bin2hex(random_bytes(24));
-        $remembered=applyRememberChoice($x,(int)$_SESSION['uid']);
-        ok(['user'=>me(),'csrf'=>$_SESSION['csrf'],'remember_active'=>$remembered]);
+        $auth=externalAuthData($x,(int)$_SESSION['uid']);
+        ok(['user'=>me(),'csrf'=>$_SESSION['csrf']] + $auth);
     }catch(PDOException $e){if($e->getCode()==='23000')fail('Este e-mail já está cadastrado. Entre com sua senha.',409);throw $e;}
 }
 function userProfile(array $x,int $id): never {
@@ -303,13 +410,24 @@ function manualSave(array $x): never {
 try {
     $action=clean($_GET['action']??'',50);
     $verb=$_SERVER['REQUEST_METHOD']??'GET';
-    restoreRememberedLogin();
+    if (!$externalRequest) restoreRememberedLogin();
+    else externalUserFromHeader();
     if($verb==='POST')requirePost();
     if($action==='bootstrap'&&$verb==='GET'){
-        ok(['csrf'=>$_SESSION['csrf'],'logged_in'=>!empty($_SESSION['uid']),'timezone'=>'America/Sao_Paulo','hours'=>workingHours()]);
+        ok(['api_version'=>'10.2','area'=>$accessArea,'csrf'=>$_SESSION['csrf'],'logged_in'=>!empty($_SESSION['uid']),'timezone'=>'America/Sao_Paulo','hours'=>workingHours()]);
     }
     if($action==='health'&&$verb==='GET'){
-        db()->query('SELECT 1');ok(['database'=>'connected']);
+        db()->query('SELECT 1');
+        // Checagem read-only de pré-requisitos do login; não expõe credenciais.
+        $setup=[];
+        foreach(['pet_external_tokens','pet_remember_tokens'] as $tableName) {
+            $setup[$tableName]=(bool)query(
+                'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?',
+                [$tableName]
+            )->fetchColumn();
+        }
+        ok(['database'=>'connected','api_version'=>'10.2','login_tables'=>$setup,
+            'ready_for_login'=>($setup['pet_external_tokens'] && $setup['pet_remember_tokens'])]);
     }
     if($action==='availability'&&$verb==='GET'){
         $month=clean($_GET['month']??date('Y-m'),7);
@@ -331,14 +449,19 @@ try {
         if ($audience==='client' && $role!=='client') fail('Esta conta é do administrador. Use a entrada Administrador.',403);
         if ($audience==='admin' && $role!=='admin') fail('Esta conta é de cliente. Use Quero agendar.',403);
         if ($audience!=='' && !in_array($audience,['client','admin'],true)) fail('Área de login inválida.',422);
-        resetBadLogin();session_regenerate_id(true);
+        if ($role !== $GLOBALS['accessArea'])
+            fail($GLOBALS['accessArea']==='client'?'Esta conta é do Mateus. Use Administrador.':'Esta conta é de cliente. Use Quero agendar.',403);
+        resetBadLogin();
+        if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
         $_SESSION['uid']=(int)$u['id'];$_SESSION['csrf']=bin2hex(random_bytes(24));
-        $remembered=applyRememberChoice($x,(int)$u['id']);
-        ok(['user'=>me(),'csrf'=>$_SESSION['csrf'],'remember_active'=>$remembered]);
+        $auth=externalAuthData($x,(int)$u['id']);
+        ok(['user'=>me(),'csrf'=>$_SESSION['csrf']] + $auth);
     }
     if($action==='logout'&&$verb==='POST'){
-        forgetRememberCookie();
-        $_SESSION=[];session_regenerate_id(true);
+        if ($externalRequest) revokeExternalToken();
+        else forgetRememberCookie();
+        $_SESSION=[];
+        if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
         $_SESSION['csrf']=bin2hex(random_bytes(24));ok(['csrf'=>$_SESSION['csrf']]);
     }
     if($action==='me'&&$verb==='GET')ok(['user'=>me(),'csrf'=>$_SESSION['csrf']]);
@@ -353,10 +476,17 @@ try {
         if(!$hash||!password_verify($old,(string)$hash))fail('A senha atual está incorreta.',401);
         query('UPDATE pet_users SET password_hash=? WHERE id=?',[password_hash($new,PASSWORD_DEFAULT),(int)$u['id']]);
         try{query('DELETE FROM pet_remember_tokens WHERE user_id=?',[(int)$u['id']]);}catch(Throwable $ignore){error_log('Pet Sitter token cleanup: '.$ignore->getMessage());}
-        forgetRememberCookie();
-        session_regenerate_id(true);
+        if ($externalRequest) {
+            // Revoke access from other devices and renew current access after password change.
+            query('DELETE FROM pet_external_tokens WHERE user_id=?',[(int)$u['id']]);
+            $auth=externalAuthData(['remember_me'=>false],(int)$u['id']);
+        } else {
+            forgetRememberCookie();
+            if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
+            $auth=[];
+        }
         $_SESSION['csrf']=bin2hex(random_bytes(24));
-        ok(['message'=>'Senha alterada com sucesso.','csrf'=>$_SESSION['csrf']]);
+        ok(['message'=>'Senha alterada com sucesso.','csrf'=>$_SESSION['csrf']] + $auth);
     }
 
     if($action==='pets'&&$verb==='GET')ok(['pets'=>query('SELECT id,user_id,name,species,breed,care_notes,created_at FROM pet_pets WHERE user_id=? AND active=1 ORDER BY created_at DESC',[(int)client()['id']])->fetchAll()]);
@@ -461,7 +591,12 @@ try {
     fail('Rota de API desconhecida. Atualize os arquivos PHP/JS juntos e recarregue a página.',404);
 } catch(PDOException $e) {
     error_log('PetCare SQL error '.$e->getCode().': '.$e->getMessage());
-    fail('Ocorreu um erro no banco. Verifique se o SQL de instalação foi executado.',500);
+    $message=$e->getMessage();
+    if ((string)($e->errorInfo[1] ?? '')==='1146'
+        && (str_contains($message, 'pet_external_tokens') || str_contains($message, 'pet_remember_tokens'))) {
+        fail('Falta instalar as tabelas do login. Importe instalacao/corrigir_tabelas_login.sql no banco petcare.',503);
+    }
+    fail('Ocorreu um erro no banco. Confira as tabelas e os logs PHP do cPanel.',500);
 } catch(Throwable $e) {
     error_log('PetCare error: '.$e->getMessage());
     fail('Ocorreu um erro no servidor. Tente novamente.',500);
