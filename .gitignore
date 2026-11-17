@@ -1,14 +1,6 @@
-# Senhas e configurações particulares; nunca enviar ao GitHub
-/_private/config.php
-/config.php
-.env
-.env.*
+# Nunca publicar segredos nem backups
+_private/config.php
+config.php
+*.sql
+*.env
 *.log
-*.bak
-*.old
-*.zip
-*backup*
-*diagnostico*
-verificar_*.php
-.DS_Store
-Thumbs.db

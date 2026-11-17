@@ -1,5 +1,27 @@
 (function(){'use strict';
-let csrf='';let currentUser=null;
+let csrf='';
+const apiBase=window.MPET_API_BASE||'api/index.php';
+const externalMode=Boolean(window.MPET_API_BASE);
+// Cliente e administrador nunca compartilham o mesmo token ou sessão.
+const accessArea=/(?:^|\/)admin\.(?:php|html)$/i.test(location.pathname)?'admin':'client';
+const tokenKey='mateus-pet-sitter-v10-1-'+accessArea;
+// Evita que o token único da V10 volte a autenticar a área incorreta.
+if(externalMode){try{localStorage.removeItem('mateus-pet-sitter-v10');sessionStorage.removeItem('mateus-pet-sitter-v10')}catch(e){}}
+
+function readAccessToken(){
+ if(!externalMode)return '';
+ try{return localStorage.getItem(tokenKey)||sessionStorage.getItem(tokenKey)||''}catch(e){return ''}
+}
+function clearAccessToken(){
+ if(!externalMode)return;
+ try{localStorage.removeItem(tokenKey);sessionStorage.removeItem(tokenKey)}catch(e){}
+}
+function saveAccessToken(raw,remember){
+ if(!externalMode||!raw)return;
+ clearAccessToken();
+ try{(remember?localStorage:sessionStorage).setItem(tokenKey,raw)}
+ catch(e){try{sessionStorage.setItem(tokenKey,raw)}catch(err){}}
+}
 const $$=s=>Array.from(document.querySelectorAll(s));
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,12 +43,14 @@ function firstFreeDay(y,m,slots){
 function toast(msg,error=false){let e=$('#toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');e.setAttribute('aria-live','polite');document.body.appendChild(e);}e.setAttribute('role',error?'alert':'status');e.setAttribute('aria-live',error?'assertive':'polite');e.textContent=msg;e.className='toast'+(error?' error':'')+' show';e.dataset.type=error?'error':'success';clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>e.classList.remove('show'),6500);}
 function formData(form){const x=Object.fromEntries(new FormData(form).entries());for(const c of form.querySelectorAll('input[type=checkbox]'))x[c.name]=c.checked;return x}
 async function api(action,body=null,params={},retried=false){
- const qs=new URLSearchParams({action,...params});
- const url='api/index.php?'+qs.toString();
- const init={credentials:'same-origin',headers:{'Accept':'application/json'}};
- if(body!==null){init.method='POST';init.headers['Content-Type']='application/json';init.headers['X-CSRF-Token']=csrf;init.body=JSON.stringify(body);}
+ const qs=new URLSearchParams({action,area:accessArea,...params});
+ const url=apiBase+'?'+qs.toString();
+ const init={credentials:externalMode?'omit':'same-origin',headers:{'Accept':'application/json'}};
+ const activeToken=readAccessToken();
+ if(externalMode&&activeToken&&!['register','login'].includes(action))init.headers['X-Pet-Token']=activeToken;
+ if(body!==null){init.method='POST';init.headers['Content-Type']='application/json';if(!externalMode)init.headers['X-CSRF-Token']=csrf;init.body=JSON.stringify(body);}
  let res;const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),11000);init.signal=controller.signal;
- try{res=await fetch(url,init)}catch(e){throw Error(e.name==='AbortError'?'O servidor demorou a responder. Tente novamente ou procure o responsável.':'Sem conexão com o servidor. Verifique internet e hospedagem.');}finally{clearTimeout(timer);}
+ try{res=await fetch(url,init)}catch(e){throw Error(e.name==='AbortError'?'O servidor demorou a responder. Tente novamente ou procure o responsável.':'Não foi possível alcançar o servidor PHP. O site do GitHub está aberto, mas a hospedagem do banco precisa estar online.');}finally{clearTimeout(timer);}
  let json;try{json=await res.json()}catch(e){throw Error('O servidor não retornou JSON. Confira PHP e os caminhos do site.');}
  if(!res.ok||json.ok===false){
    if(res.status===419&&body!==null&&!retried){
@@ -35,12 +59,25 @@ async function api(action,body=null,params={},retried=false){
      return api(action,body,params,true);
    }
    const message=res.status===419?'Sessão expirada ou cookies bloqueados. Atualize a página e tente novamente.':(json.error||`Erro HTTP ${res.status}`);
+   if(externalMode && res.status===401 && !['login','register'].includes(action))clearAccessToken();
    const err=Error(message);err.status=res.status;throw err;
  }
  if(json.csrf)csrf=json.csrf;
+ if(externalMode && json.api_token){
+   // No password is stored in the browser; only a revocable, expiring session token.
+   const userAskedRemember=Boolean(body&&body.remember_me);
+   saveAccessToken(json.api_token,userAskedRemember);
+ }
+ if(externalMode && action==='logout')clearAccessToken();
  return json;
 }
-async function bootstrap(){const x=await api('bootstrap');csrf=x.csrf;return x}
+async function bootstrap(){
+ const x=await api('bootstrap');
+ if(x.api_version!=='10.1'){
+   throw Error('A API do cPanel está desatualizada. Atualize api/index.php com o pacote V10.1 para permitir dois logins separados.');
+ }
+ csrf=x.csrf;return x;
+}
 function toggle(el,show){if(typeof el==='string')el=$(el);if(el)el.classList.toggle('hidden',!show)}
 function switchPanel(name){$$('[data-panel]').forEach(s=>toggle(s,s.dataset.panel===name));$$('[data-nav]').forEach(b=>b.classList.toggle('active',b.dataset.nav===name));window.scrollTo({top:0,behavior:'smooth'});}
 function bindNav(){document.addEventListener('click',e=>{const b=e.target.closest('[data-nav]');if(b){e.preventDefault();switchPanel(b.dataset.nav);}})}

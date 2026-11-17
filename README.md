@@ -1,42 +1,33 @@
-# Mateus Pet Sitter — V9 (GitHub Pages + servidor cPanel)
+# Mateus Pet Sitter V10.1 — Correção dos dois acessos
 
-## Correção importante
-O GitHub Pages é apenas a **entrada visual** do aplicativo. Os botões abrem telas auxiliares locais e estas oferecem acesso ao site PHP no cPanel. Assim, uma queda no domínio do cPanel não faz a **página do GitHub** desaparecer. A opção **Verificar novamente** testa a resposta da rede, mas não garante que o MySQL ou o login estejam corretos.
+## Causa e correção
+- V10 guardava o token da área do Cliente e do Administrador na mesma chave do navegador. Abrir uma segunda aba podia reaproveitar a conta incorreta.
+- A sessão PHP do cPanel também era única. Agora o servidor usa cookies separados por área, e valida o papel da conta no MySQL.
+- A tela antiga que mostra **Matheus Pet Care** e **Recurso não encontrado** indica que uma API anterior está ativa no cPanel. A V10.1 identifica isso pelo campo `api_version` e mostra instruções, não um erro genérico.
 
-As funções reais (contas, pets, senhas, agenda em tempo real, disponibilidade, clientes estrela, recorrência e aprovação) continuam nos arquivos PHP/JS e no banco MySQL do cPanel.
+## Instale nesta ordem (precisa das DUAS atualizações)
+1. Faça backup da pasta `/public_html/matheus-pet-care/` e exporte o banco `marce7856_petcare` no phpMyAdmin.
+2. **Servidor:** envie o ZIP `Mateus_Pet_Sitter_V10_1_CPANEL.zip` para `/public_html/matheus-pet-care/` e extraia ali. Confirme que o arquivo **`api/index.php`** foi substituído. **Não apague o banco; não substitua `_private/config.php`.**
+3. Se ainda não tiver feito a instalação da V10, execute uma única vez o SQL **`instalacao/atualizar_v10.sql`**. Ele cria `pet_external_tokens` sem apagar dados. Quem já fez a V10 não precisa rodar de novo.
+4. Confirme a API no navegador: `https://marce7856.c33.integrator.host/matheus-pet-care/api/index.php?action=health`. Deve aparecer `"ok":true`, `"database":"connected"` e `"api_version":"10.1"`.
+5. **GitHub:** extraia o ZIP `Mateus_Pet_Sitter_V10_1_GITHUB.zip` no repositório local `Pataagenda` pelo GitHub Desktop. **Não envie o ZIP do cPanel ao GitHub**; nele há PHP que o GitHub não executa. Confirme `index.html`, `cliente.html`, `admin.html`, `site.js`, `api-config.js` na raiz. Clique em Commit to main → Push origin.
+6. Acesse `https://mnsistemasedesenvolvimento.github.io/Pataagenda/` e pressione Ctrl+Shift+R se necessário.
 
-## Para colocar no GitHub
-1. Extraia o ZIP GitHub na pasta clonada `Pataagenda` (nunca apague `.git`).
-2. Mantenha `index.html`, `cliente.html`, `admin.html`, `404.html` na **raiz** da branch `main`.
-3. No GitHub Desktop: **Commit to main → Push origin**.
-4. Em **Settings → Pages**, use **Deploy from branch → main → /(root)**.
-5. Acesse `https://mnsistemasdesenvolvimento.github.io/Pataagenda/` (com P maiúsculo no caminho).
-6. Se houver erros antigos, recarregue com **Ctrl+Shift+R** e confira `Actions`/`Pages` para falha de publicação.
-
-## Para atualizar o cPanel (se quiser as correções da V9)
-1. Faça backup da pasta `/public_html/matheus-pet-care` e do banco `marce7856_petcare`.
-2. Use o ZIP **V9_SERVIDOR_CPANEL**; extraia em `/public_html/matheus-pet-care`.
-3. NÃO altere nem apague `_private/config.php`. A conexão funcional continua nesse arquivo.
-4. Não há migração SQL obrigatória nesta atualização. Não importe `instalar_mysql.sql` novamente.
-5. Abra diretamente `/matheus-pet-care/index.php`, `/cliente.php` e `/admin.php` para testar.
-
-## Por que não basta atualizar o GitHub?
-O GitHub Pages **não executa PHP** e não conecta diretamente ao MySQL hospedado no cPanel. A atualização no GitHub NÃO envia os arquivos PHP para o cPanel. São dois destinos de publicação distintos.
+## Teste real em duas abas
+- Aba 1: `https://mnsistemasedesenvolvimento.github.io/Pataagenda/admin.html` — login do Mateus.
+- Aba 2: `https://mnsistemasedesenvolvimento.github.io/Pataagenda/cliente.html` — cadastro/login com OUTRO e-mail do tipo cliente.
+- Cliente cadastra pet, seleciona data/horário livre e solicita uma visita.
+- Mateus abre Pedidos e confirma. Cliente abre Meus pedidos e vê a confirmação.
+- Se a agenda parecer vazia, use Atualizar agenda e confira resposta da API. Sem banco online não se pode mostrar disponibilidade real.
+- Sair do painel Mateus encerra apenas a sessão de administrador; cliente permanece conectado na outra aba. Sair do cliente não desconecta o administrador.
 
 ## Segurança
-- NUNCA publique `/_private/config.php` ou senhas no GitHub.
-- `config.example.php` é um modelo SEM senha.
-- Mesmo com `.gitignore`, um segredo que já foi versionado antes deve ser removido do histórico, e a senha trocada.
-- A senha do MySQL que apareceu no chat deve ser substituída por outra no cPanel e atualizada APENAS no servidor.
+- O ZIP não contém a senha do banco. Mantenha `_private/config.php` exclusivamente no cPanel, protegido por `.htaccess`.
+- Sua senha MySQL já foi compartilhada na conversa; redefina-a no cPanel quando possível.
+- Nunca copie `_private/config.php` para o GitHub público.
+- As mudanças são de sessão e interface. **Não é necessário apagar ou recriar tabelas.**
 
-## V9 — alterações
-- Nome consistente: **Mateus Pet Sitter**.
-- GitHub: novas páginas de entrada separadas para cliente e administrador, sem redirecionamentos automáticos.
-- O usuário vê uma mensagem informativa quando a hospedagem não responde, em vez de uma tela sem explicação.
-- Navegação mobile, indicação de clique e etapas de cadastro mantidas.
-- cPanel: timeout nas chamadas de API e mensagem clara de rota desatualizada.
-- cPanel: calendário público com datas bloqueadas quando a API não responde, evitando apresentar horários como livres sem confirmação.
-- API, cadastro, painel administrativo, sessões, logout, cookies "lembrar acesso" e agenda V8 preservados.
-
-## Limites dos testes
-Arquivos e interface podem ser validados localmente. O banco MySQL real e o status do domínio da hospedagem precisam ser testados pelo responsável no cPanel. Nenhum cadastro real foi alterado.
+## Diagnóstico de versão
+`.../api/index.php?action=health` deve incluir `api_version: 10.1`. Se não incluir, o PHP antigo ainda está sendo executado no cPanel: confira o caminho de extração e o cache.
+`.../api/index.php?action=bootstrap&area=client` retorna `api_version: 10.1` e `area: client`.
+`.../api/index.php?action=bootstrap&area=admin` retorna `api_version: 10.1` e `area: admin`.

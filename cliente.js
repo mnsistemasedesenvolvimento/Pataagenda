@@ -16,7 +16,7 @@ function showAdminSession(){
 }
 async function exitAdminSession(){
  const button=$('#endAdminSession');button.disabled=true;
- try{await api('logout',{});location.replace('cliente.php?saida=1')}
+ try{await api('logout',{});location.replace(window.MPET_API_BASE?'index.html?saida=1':'cliente.php?saida=1')}
  catch(e){button.disabled=false;toast('Não foi possível encerrar a sessão. '+e.message,true)}
 }
 
@@ -70,7 +70,7 @@ async function submitBooking(e){e.preventDefault();if(!chosenDate||!chosenTime){
 async function cancel(id){if(!confirm('Deseja cancelar este pedido? O horário será liberado.'))return;try{await api('cancel_booking',{id});await Promise.all([fetchBookings(),readMonth()]);toast('Pedido cancelado.')}catch(err){toast(err.message,true)}}
 async function updateProfile(e){e.preventDefault();const f=e.currentTarget,b=e.submitter||f.querySelector('button[type=submit]');b.disabled=true;try{const x=await api('update_profile',formData(f));user=x.user;showApp();toast('Seu cadastro foi atualizado.');switchPanel('profile');}catch(err){toast(err.message,true)}finally{b.disabled=false;}}
 async function moveMonth(delta){month.m+=delta;if(month.m>12){month.m=1;month.y++}if(month.m<1){month.m=12;month.y--}chosenDate='';chosenTime='';try{await readMonth()}catch(e){toast(e.message,true)}}
-function bind(){bindNav();$('#showSignup').onclick=()=>{errorBanner('');showAuth(true)};$('#showLogin').onclick=()=>{errorBanner('');showAuth(false)};$('#signupForm').onsubmit=signup;$('#loginForm').onsubmit=signin;$('#newPet').onclick=()=>petModal();$('#closePet').onclick=()=>toggle('#petModal',false);$('#petModal').addEventListener('click',e=>{if(e.target===$('#petModal'))toggle('#petModal',false)});$('#petForm').onsubmit=savePet;$('#removePet').onclick=deletePet;$('#petList').onclick=e=>{const b=e.target.closest('[data-editpet]');if(b)petModal(pets.find(p=>Number(p.id)===Number(b.dataset.editpet)));};$('#bookingForm').onsubmit=submitBooking;$('#bookingList').onclick=e=>{const b=e.target.closest('[data-cancel]');if(b)cancel(Number(b.dataset.cancel));};$('#profileForm').onsubmit=updateProfile;$('#clientLogout').onclick=async()=>{try{await api('logout',{});user=null;location.replace('cliente.php?saida=1')}catch(e){toast('Não foi possível sair: '+e.message,true)}};
+function bind(){bindNav();$('#showSignup').onclick=()=>{errorBanner('');showAuth(true)};$('#showLogin').onclick=()=>{errorBanner('');showAuth(false)};$('#signupForm').onsubmit=signup;$('#loginForm').onsubmit=signin;$('#newPet').onclick=()=>petModal();$('#closePet').onclick=()=>toggle('#petModal',false);$('#petModal').addEventListener('click',e=>{if(e.target===$('#petModal'))toggle('#petModal',false)});$('#petForm').onsubmit=savePet;$('#removePet').onclick=deletePet;$('#petList').onclick=e=>{const b=e.target.closest('[data-editpet]');if(b)petModal(pets.find(p=>Number(p.id)===Number(b.dataset.editpet)));};$('#bookingForm').onsubmit=submitBooking;$('#bookingList').onclick=e=>{const b=e.target.closest('[data-cancel]');if(b)cancel(Number(b.dataset.cancel));};$('#profileForm').onsubmit=updateProfile;$('#clientLogout').onclick=async()=>{try{await api('logout',{});user=null;location.replace(window.MPET_API_BASE?'index.html?saida=1':'cliente.php?saida=1')}catch(e){toast('Não foi possível sair: '+e.message,true)}};
 $('#endAdminSession').onclick=exitAdminSession;$('#prevMonth').onclick=()=>moveMonth(-1);$('#nextMonth').onclick=()=>moveMonth(1);$('#publicPrev').onclick=()=>publicMoveMonth(-1);$('#publicNext').onclick=()=>publicMoveMonth(1);$('#publicGoAuth').onclick=()=>{
  const adminNotice=$('#adminSessionNotice');
  if(!adminNotice.classList.contains('hidden')){
@@ -79,7 +79,12 @@ $('#endAdminSession').onclick=exitAdminSession;$('#prevMonth').onclick=()=>moveM
  showAuth(true);$('#authSection').scrollIntoView({behavior:'smooth'});
  $('#signupForm [name=full_name]').focus({preventScroll:true});
 };$('#clientPasswordForm').onsubmit=changePassword;}
-async function start(){bind();renderPublicCalendar();try{await bootstrap();try{const x=await api('me');if(x.user.role==='admin'){showAdminSession();await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true));return}await signedIn(x.user)}catch(err){if(err.status!==401)errorBanner(err.message);showAuth(true);await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true))}}catch(err){errorBanner('Falha ao iniciar. '+err.message);showAuth(true);await readPublicMonth().catch(()=>{});}setInterval(async()=>{if(document.hidden)return;if(!user){if(!$('#publicPreview').classList.contains('hidden'))await readPublicMonth().catch(e=>publicStatus('Sem conexão com a agenda.',true));return;}try{await readMonth()}catch(err){setCalendarStatus('Sem conexão com a agenda. Tente novamente.',true);}},15000);setInterval(async()=>{if(!user||document.hidden)return;try{await fetchBookings()}catch(err){}},30000);}
+async function start(){bind();renderPublicCalendar();try{await bootstrap();try{const x=await api('me');if(x.user.role!=='client'){
+   showAuth(true);
+   errorBanner('Este acesso é apenas para clientes. Entre com uma conta de cliente. A sessão administrativa em outra aba será mantida.');
+   await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true));
+   return;
+  }await signedIn(x.user)}catch(err){if(err.status!==401)errorBanner(err.message);showAuth(true);await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true))}}catch(err){errorBanner('Falha ao iniciar. '+err.message);showAuth(true);await readPublicMonth().catch(()=>{});}setInterval(async()=>{if(document.hidden)return;if(!user){if(!$('#publicPreview').classList.contains('hidden'))await readPublicMonth().catch(e=>publicStatus('Sem conexão com a agenda.',true));return;}try{await readMonth()}catch(err){setCalendarStatus('Sem conexão com a agenda. Tente novamente.',true);}},15000);setInterval(async()=>{if(!user||document.hidden)return;try{await fetchBookings()}catch(err){}},30000);}
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload();});
 start();
 })();
