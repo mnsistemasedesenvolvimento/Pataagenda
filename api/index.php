@@ -1,5 +1,8 @@
 <?php
 declare(strict_types=1);
+// Nunca envie warnings PHP nem caminhos internos ao navegador.
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate');
@@ -52,6 +55,9 @@ if (!is_file($configFile)) {
 ob_start();
 try {
     $config = require $configFile;
+} catch (Throwable $e) {
+    error_log('PetCare config load failed: '.$e->getMessage());
+    $config = null;
 } finally {
     $configOutput = ob_get_clean();
     if ($configOutput !== '') {
@@ -148,6 +154,11 @@ function db(): PDO {
     }
 }
 function query(string $sql,array $params=[]): PDOStatement {
+    // Marca apenas a tabela/ação, sem registrar parâmetros ou senhas na resposta.
+    $GLOBALS['sql_operation'] = 'consulta';
+    if (preg_match('/\b(?:FROM|INTO|UPDATE)\s+(pet_[a-z_]+)\b/i', $sql, $m)) {
+        $GLOBALS['sql_operation'] = strtolower(strtok(ltrim($sql), ' ')).':'.strtolower($m[1]);
+    }
     $q=db()->prepare($sql); $q->execute($params);return $q;
 }
 // External login tokens: 256 bits of random data, only SHA-256 hashes in MySQL.
@@ -329,15 +340,32 @@ function registerUser(array $x): never {
     $neighborhood=clean($x['neighborhood']??'',90);
     $reference=clean($x['reference']??'',180);
     $notes=clean($x['notes']??'',1000);
+    $pdo=db();
+    $external=(bool)$GLOBALS['externalRequest'];
     try{
+        if ($external) $pdo->beginTransaction();
         query('INSERT INTO pet_users (role,email,password_hash,full_name,phone,street,house_number,neighborhood,city,reference,notes) VALUES (\'client\',?,?,?,?,?,?,?,?,?,?)',
           [$email,password_hash($pass,PASSWORD_DEFAULT),$name,$tel,$street,$num,$neighborhood,$city,$reference,$notes]);
-        if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
-        $_SESSION['uid']=(int)db()->lastInsertId();
+        $uid=(int)$pdo->lastInsertId();
+        // Cadastro externo e token são uma única operação: não deixa conta parcial.
+        $_SESSION['uid']=$uid;
+        $user=me();
+        if ($external) {
+            $auth=externalAuthData($x,$uid);
+            $pdo->commit();
+        } else {
+            if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
+            $auth=externalAuthData($x,$uid);
+        }
         $_SESSION['csrf']=bin2hex(random_bytes(24));
-        $auth=externalAuthData($x,(int)$_SESSION['uid']);
-        ok(['user'=>me(),'csrf'=>$_SESSION['csrf']] + $auth);
-    }catch(PDOException $e){if($e->getCode()==='23000')fail('Este e-mail já está cadastrado. Entre com sua senha.',409);throw $e;}
+        ok(['user'=>$user,'csrf'=>$_SESSION['csrf']] + $auth);
+    }catch(Throwable $e){
+        if($pdo->inTransaction()) $pdo->rollBack();
+        unset($_SESSION['uid']);
+        if($e instanceof PDOException && (int)($e->errorInfo[1]??0)===1062 && ($GLOBALS['sql_operation']??'')==='insert:pet_users')
+            fail('Este e-mail já está cadastrado. Entre com sua senha.',409);
+        throw $e;
+    }
 }
 function userProfile(array $x,int $id): never {
     $name=required($x,'full_name',120);$tel=required($x,'phone',25);
@@ -414,20 +442,27 @@ try {
     else externalUserFromHeader();
     if($verb==='POST')requirePost();
     if($action==='bootstrap'&&$verb==='GET'){
-        ok(['api_version'=>'10.2','area'=>$accessArea,'csrf'=>$_SESSION['csrf'],'logged_in'=>!empty($_SESSION['uid']),'timezone'=>'America/Sao_Paulo','hours'=>workingHours()]);
+        ok(['api_version'=>'10.1','api_build'=>'10.3','area'=>$accessArea,'csrf'=>$_SESSION['csrf'],'logged_in'=>!empty($_SESSION['uid']),'timezone'=>'America/Sao_Paulo','hours'=>workingHours()]);
     }
     if($action==='health'&&$verb==='GET'){
         db()->query('SELECT 1');
-        // Checagem read-only de pré-requisitos do login; não expõe credenciais.
-        $setup=[];
-        foreach(['pet_external_tokens','pet_remember_tokens'] as $tableName) {
-            $setup[$tableName]=(bool)query(
-                'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?',
-                [$tableName]
-            )->fetchColumn();
+        // Read-only: verify required columns as well as table existence.
+        $probes = [
+            'pet_users'=>'SELECT id,role,email,password_hash,full_name,phone,street,house_number,neighborhood,city,reference,notes,favorite,monthly_frequency,created_at FROM pet_users LIMIT 0',
+            'pet_auth_attempts'=>'SELECT id,ip_hash,created_at FROM pet_auth_attempts LIMIT 0',
+            'pet_external_tokens'=>'SELECT id,user_id,token_hash,expires_at,created_at FROM pet_external_tokens LIMIT 0',
+            'pet_remember_tokens'=>'SELECT id,user_id,selector,token_hash,expires_at,created_at FROM pet_remember_tokens LIMIT 0',
+        ];
+        $setup=[]; $checks=[];
+        foreach($probes as $tableName=>$sql) {
+            try { db()->query($sql); $setup[$tableName]=true; }
+            catch(PDOException $e) {
+                $setup[$tableName]=false;
+                $checks[$tableName]=(int)($e->errorInfo[1]??0);
+            }
         }
-        ok(['database'=>'connected','api_version'=>'10.2','login_tables'=>$setup,
-            'ready_for_login'=>($setup['pet_external_tokens'] && $setup['pet_remember_tokens'])]);
+        ok(['database'=>'connected','api_version'=>'10.3','api_contract'=>'10.1','login_tables'=>$setup,
+            'schema_errors'=>(object)$checks,'ready_for_login'=>!in_array(false,$setup,true)]);
     }
     if($action==='availability'&&$verb==='GET'){
         $month=clean($_GET['month']??date('Y-m'),7);
@@ -589,14 +624,19 @@ try {
         catch(PDOException $e){if($e->getCode()==='23000')fail('Este horário acabou de ficar indisponível.',409);throw $e;}
     }
     fail('Rota de API desconhecida. Atualize os arquivos PHP/JS juntos e recarregue a página.',404);
-} catch(PDOException $e) {
-    error_log('PetCare SQL error '.$e->getCode().': '.$e->getMessage());
-    $message=$e->getMessage();
-    if ((string)($e->errorInfo[1] ?? '')==='1146'
-        && (str_contains($message, 'pet_external_tokens') || str_contains($message, 'pet_remember_tokens'))) {
-        fail('Falta instalar as tabelas do login. Importe instalacao/corrigir_tabelas_login.sql no banco petcare.',503);
-    }
-    fail('Ocorreu um erro no banco. Confira as tabelas e os logs PHP do cPanel.',500);
+ } catch(PDOException $e) {
+    $code=(int)($e->errorInfo[1]??0);
+    $operation=(string)($GLOBALS['sql_operation']??'consulta');
+    error_log('PetCare SQL error '.$e->getCode().' ['.$operation.']: '.$e->getMessage());
+    $message=match($code) {
+        1146 => 'Tabela ausente no banco. Importe o SQL de atualização de login se a tabela indicada for de autenticação.',
+        1054 => 'Estrutura do banco incompatível: coluna ausente. Não apague os dados.',
+        1044,1142,1143 => 'O usuário MySQL não tem a permissão necessária para esta operação.',
+        1452 => 'O banco recusou o vínculo com o cadastro existente.',
+        1062 => 'O banco recusou um registro duplicado.',
+        default => 'Ocorreu um erro no banco. Confira o código para diagnosticar.'
+    };
+    done(['ok'=>false,'error'=>$message.' (MySQL '.$code.'; '.$operation.')', 'mysql_code'=>$code,'operation'=>$operation],500);
 } catch(Throwable $e) {
     error_log('PetCare error: '.$e->getMessage());
     fail('Ocorreu um erro no servidor. Tente novamente.',500);
