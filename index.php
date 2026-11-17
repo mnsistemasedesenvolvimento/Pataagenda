@@ -2,7 +2,7 @@
 <!doctype html><html lang="pt-BR"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#153e35"><meta name="description" content="Mateus Pet Sitter — visitas e cuidados de animais em domicílio. Veja disponibilidade e solicite agendamentos pelo celular.">
-<title>Mateus Pet Sitter — Cuidados com carinho</title><link rel="stylesheet" href="site.css?v=8.0.0">
+<title>Mateus Pet Sitter — Cuidados com carinho</title><link rel="stylesheet" href="site.css?v=9.0.0">
 </head><body>
 <header class="header"><div class="wrap header-inner"><a class="brand" href="index.php"><span class="brand-mark">🐾</span><span class="brand-title">Mateus Pet Sitter<small class="brand-sub">Visitas em domicílio</small></span></a><a class="sub-link" href="privacidade.php">Privacidade</a></div></header>
 <section class="hero"><div class="wrap hero-content"><span class="pill">🐶 Seu pet bem cuidado, mesmo quando você não está</span><h1>Carinho e atenção para <span>seu melhor amigo.</span></h1><p>Solicite uma visita do Mateus no conforto da sua casa. Cadastre-se em poucos passos, acompanhe o calendário e receba a confirmação do seu pedido.</p><div class="hero-chips"><span>🐕 Visitas e companhia</span><span>📆 Horários disponíveis</span><span>🔒 Cadastro protegido</span></div></div></section>

@@ -458,7 +458,7 @@ try {
         try {query('INSERT INTO pet_slots(visit_date,visit_time,state) VALUES(?,?,\'blocked\')',[$date,$time.':00']);ok(['state'=>'blocked']);}
         catch(PDOException $e){if($e->getCode()==='23000')fail('Este horário acabou de ficar indisponível.',409);throw $e;}
     }
-    fail('Recurso não encontrado.',404);
+    fail('Rota de API desconhecida. Atualize os arquivos PHP/JS juntos e recarregue a página.',404);
 } catch(PDOException $e) {
     error_log('PetCare SQL error '.$e->getCode().': '.$e->getMessage());
     fail('Ocorreu um erro no banco. Verifique se o SQL de instalação foi executado.',500);

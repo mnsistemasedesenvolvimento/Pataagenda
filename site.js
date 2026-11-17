@@ -25,7 +25,8 @@ async function api(action,body=null,params={},retried=false){
  const url='api/index.php?'+qs.toString();
  const init={credentials:'same-origin',headers:{'Accept':'application/json'}};
  if(body!==null){init.method='POST';init.headers['Content-Type']='application/json';init.headers['X-CSRF-Token']=csrf;init.body=JSON.stringify(body);}
- let res;try{res=await fetch(url,init)}catch(e){throw Error('Sem conexão com o servidor. Verifique internet e hospedagem.');}
+ let res;const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),11000);init.signal=controller.signal;
+ try{res=await fetch(url,init)}catch(e){throw Error(e.name==='AbortError'?'O servidor demorou a responder. Tente novamente ou procure o responsável.':'Sem conexão com o servidor. Verifique internet e hospedagem.');}finally{clearTimeout(timer);}
  let json;try{json=await res.json()}catch(e){throw Error('O servidor não retornou JSON. Confira PHP e os caminhos do site.');}
  if(!res.ok||json.ok===false){
    if(res.status===419&&body!==null&&!retried){
@@ -65,5 +66,13 @@ function slotButtons(box,date,slots,chosen,selectTime,adminMode=false){
  }).join('');
  box.querySelectorAll('[data-time]').forEach(b=>b.addEventListener('click',()=>selectTime(b.dataset.time)));
 }
-window.MPET={api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,whats,calendar,slotButtons,firstFreeDay};
+function calendarOffline(grid,y,m){
+ if(!grid)return;
+ const first=new Date(y,m-1,1).getDay(),total=new Date(y,m,0).getDate();
+ let html=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(v=>`<span class="weekday">${v}</span>`).join('');
+ for(let i=0;i<first;i++)html+='<span class="day empty-day"></span>';
+ for(let d=1;d<=total;d++)html+=`<button type="button" class="day unavailable" disabled title="Conexão com a agenda indisponível"><span>${d}</span></button>`;
+ grid.innerHTML=html;
+}
+window.MPET={api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,whats,calendar,slotButtons,firstFreeDay,calendarOffline};
 })();

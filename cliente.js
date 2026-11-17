@@ -1,8 +1,8 @@
 (function(){'use strict';
-const P=window.MPET,{api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,calendar,slotButtons,firstFreeDay}=P;
+const P=window.MPET,{api,bootstrap,esc,formatDate,fmtMonth,dateISO,today,nowBR,hours,toast,formData,toggle,switchPanel,bindNav,status,calendar,slotButtons,firstFreeDay,calendarOffline}=P;
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 let user=null,pets=[],bookings=[],slots=[],chosenDate='',chosenTime='',month={y:nowBR().getFullYear(),m:nowBR().getMonth()+1};
-let publicSlots=[],publicDate='',publicMonth={...month};
+let publicSlots=[],publicDate='',publicMonth={...month},publicLoaded=false;
 function setCalendarStatus(msg,error=false){const x=$('#calendarStatus');if(x){x.textContent=(error?'⚠️ ':'✓ ')+msg;x.classList.toggle('bad',error);}}
 function errorBanner(msg){$('#errorBanner').textContent=msg;toggle('#errorBanner',!!msg);}
 function authMessage(which,msg){const el=$(which==='signup'?'#signupMessage':'#loginMessage');if(!el)return;el.textContent=msg;toggle(el,!!msg);if(msg)el.scrollIntoView({behavior:'smooth',block:'center'});}
@@ -24,12 +24,14 @@ function publicStatus(message,error=false){const el=$('#publicStatus');if(el){el
 function renderPublicCalendar(){
  $('#publicMonth').textContent=fmtMonth(publicMonth.y,publicMonth.m);
  $('#publicPrev').disabled=publicMonth.y===nowBR().getFullYear()&&publicMonth.m===nowBR().getMonth()+1;$('#publicNext').disabled=(publicMonth.y-nowBR().getFullYear())*12+(publicMonth.m-nowBR().getMonth()-1)>=12;
- calendar($('#publicDays'),publicMonth.y,publicMonth.m,publicSlots,publicDate,d=>{publicDate=d;renderPublicCalendar();});
- $('#publicDayTitle').textContent=publicDate?'Disponibilidade de '+formatDate(publicDate):'Nenhum horário livre neste mês — avance para o próximo';
- slotButtons($('#publicSlots'),publicDate,publicSlots,'',t=>{publicStatus('Horário '+t+' livre. Crie sua conta para solicitar esse atendimento.');$('#publicGoAuth').focus();});
+ if(publicLoaded)calendar($('#publicDays'),publicMonth.y,publicMonth.m,publicSlots,publicDate,d=>{publicDate=d;renderPublicCalendar();});
+ else calendarOffline($('#publicDays'),publicMonth.y,publicMonth.m);
+ $('#publicDayTitle').textContent=!publicLoaded?'Aguardando conexão com a agenda':publicDate?'Disponibilidade de '+formatDate(publicDate):'Nenhum horário livre neste mês — avance para o próximo';
+ if(publicLoaded)slotButtons($('#publicSlots'),publicDate,publicSlots,'',t=>{publicStatus('Horário '+t+' livre. Crie sua conta para solicitar esse atendimento.');$('#publicGoAuth').focus();});
+ else $('#publicSlots').innerHTML='<div class="empty" style="grid-column:1/-1">Os horários só aparecem após confirmar a disponibilidade com o servidor.</div>';
 }
-async function readPublicMonth(){const x=await api('availability',null,{month:dateISO(publicMonth.y,publicMonth.m,1).slice(0,7)});publicSlots=x.slots;if(!publicDate)publicDate=firstFreeDay(publicMonth.y,publicMonth.m,publicSlots);renderPublicCalendar();publicStatus('Atualização automática a cada 15 segundos. Horários sujeitos à confirmação.');}
-async function publicMoveMonth(delta){publicMonth.m+=delta;if(publicMonth.m>12){publicMonth.m=1;publicMonth.y++;}if(publicMonth.m<1){publicMonth.m=12;publicMonth.y--;}publicDate='';try{await readPublicMonth();}catch(e){publicStatus('Não foi possível consultar o calendário: '+e.message,true);}}
+async function readPublicMonth(){const x=await api('availability',null,{month:dateISO(publicMonth.y,publicMonth.m,1).slice(0,7)});publicSlots=x.slots;publicLoaded=true;if(!publicDate)publicDate=firstFreeDay(publicMonth.y,publicMonth.m,publicSlots);renderPublicCalendar();publicStatus('Atualização automática a cada 15 segundos. Horários sujeitos à confirmação.');}
+async function publicMoveMonth(delta){publicMonth.m+=delta;if(publicMonth.m>12){publicMonth.m=1;publicMonth.y++;}if(publicMonth.m<1){publicMonth.m=12;publicMonth.y--;}publicDate='';try{await readPublicMonth();}catch(e){publicLoaded=false;renderPublicCalendar();publicStatus('Não foi possível consultar o calendário: '+e.message,true);}}
 async function changePassword(e){e.preventDefault();const f=e.currentTarget,b=e.submitter||f.querySelector('button[type=submit]');b.disabled=true;try{await api('change_password',formData(f));f.reset();toast('Senha atualizada com sucesso!');}catch(err){toast(err.message,true);}finally{b.disabled=false;}}
 async function readMonth(){const x=await api('availability',null,{month:dateISO(month.y,month.m,1).slice(0,7)});slots=x.slots;if(chosenTime&&slots.some(v=>v.visit_date===chosenDate&&v.visit_time===chosenTime)){chosenTime='';toggle('#bookingBox',false);toast('O horário selecionado acabou de ficar ocupado. Escolha outro.',true);}if(!chosenDate)chosenDate=firstFreeDay(month.y,month.m,slots);renderCalendar();setCalendarStatus('Agenda atualizada.');}
 function renderPets(){
@@ -77,7 +79,7 @@ $('#endAdminSession').onclick=exitAdminSession;$('#prevMonth').onclick=()=>moveM
  showAuth(true);$('#authSection').scrollIntoView({behavior:'smooth'});
  $('#signupForm [name=full_name]').focus({preventScroll:true});
 };$('#clientPasswordForm').onsubmit=changePassword;}
-async function start(){bind();try{await bootstrap();try{const x=await api('me');if(x.user.role==='admin'){showAdminSession();await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true));return}await signedIn(x.user)}catch(err){if(err.status!==401)errorBanner(err.message);showAuth(true);await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true))}}catch(err){errorBanner('Falha ao iniciar. '+err.message);showAuth(true);await readPublicMonth().catch(()=>{});}setInterval(async()=>{if(document.hidden)return;if(!user){if(!$('#publicPreview').classList.contains('hidden'))await readPublicMonth().catch(e=>publicStatus('Sem conexão com a agenda.',true));return;}try{await readMonth()}catch(err){setCalendarStatus('Sem conexão com a agenda. Tente novamente.',true);}},15000);setInterval(async()=>{if(!user||document.hidden)return;try{await fetchBookings()}catch(err){}},30000);}
+async function start(){bind();renderPublicCalendar();try{await bootstrap();try{const x=await api('me');if(x.user.role==='admin'){showAdminSession();await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true));return}await signedIn(x.user)}catch(err){if(err.status!==401)errorBanner(err.message);showAuth(true);await readPublicMonth().catch(e=>publicStatus('Agenda temporariamente indisponível: '+e.message,true))}}catch(err){errorBanner('Falha ao iniciar. '+err.message);showAuth(true);await readPublicMonth().catch(()=>{});}setInterval(async()=>{if(document.hidden)return;if(!user){if(!$('#publicPreview').classList.contains('hidden'))await readPublicMonth().catch(e=>publicStatus('Sem conexão com a agenda.',true));return;}try{await readMonth()}catch(err){setCalendarStatus('Sem conexão com a agenda. Tente novamente.',true);}},15000);setInterval(async()=>{if(!user||document.hidden)return;try{await fetchBookings()}catch(err){}},30000);}
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload();});
 start();
 })();
